@@ -26,3 +26,7 @@ Core loop: **Find → Decide → Policy → Act → Prove → Replan**
 - Member 2 — Backend, algorithms, AI/LLM integration, Cognee, Sarvam, execution n8n workflow
 
 ## Project structure
+
+
+## Status
+🚧 In active development for hackathon submission.
