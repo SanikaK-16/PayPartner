@@ -19,6 +19,10 @@ from app.models import (
     Transaction,
     Verification,
 )
+from app.services.opportunity_engine import (
+    find_all_opportunities,
+    persist_opportunities,
+)
 
 def seed_merchant():
     db = SessionLocal()
@@ -449,3 +453,25 @@ if __name__ == "__main__":
     seed_products(merchant_id)
     seed_customers(merchant_id)
     seed_transactions(merchant_id)
+
+    # Generate and persist merchant opportunities
+    db = SessionLocal()
+
+    try:
+        opportunities = find_all_opportunities(
+            db=db,
+            merchant_id=merchant_id,
+        )
+
+        persist_opportunities(
+            db=db,
+            merchant_id=merchant_id,
+            opportunities=opportunities,
+        )
+
+        print(
+            f"Opportunities generated: {len(opportunities)}"
+        )
+
+    finally:
+        db.close()
