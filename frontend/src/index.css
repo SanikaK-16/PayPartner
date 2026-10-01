@@ -3,12 +3,26 @@
 @theme {
   --color-primary: #00BAF2;
   --color-navy: #012A4D;
-  --color-bg: #F7F9FB;
+  --color-background: #F7F9FB;
   --color-border: #E5E9EC;
   --color-text: #1A2B3C;
   --color-text-secondary: #667085;
   --color-success: #1DB954;
   --color-warning: #F5A623;
   --color-error: #E5484D;
-  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #F7F9FB;
+  color: #1A2B3C;
 }
