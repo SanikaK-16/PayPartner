@@ -1,6 +1,26 @@
-node_modules/
-dist/
+# Environment variables and secrets
 .env
+*.env
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+
+# Virtual environments
 .venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+# Test cache
+.pytest_cache/
