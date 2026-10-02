@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Search,
   SlidersHorizontal,
@@ -8,90 +8,12 @@ import {
   XCircle,
   ArrowDownLeft,
 } from "lucide-react";
-import Card from "../components/ui/Card";
 
-const transactions = [
-  {
-    id: "TXN-1001",
-    customer: "Ravi Sharma",
-    amount: 1250,
-    method: "UPI",
-    status: "Success",
-    date: "30 Sep 2026",
-    time: "10:42 AM",
-    category: "Purchase",
-  },
-  {
-    id: "TXN-1002",
-    customer: "Neha Patil",
-    amount: 850,
-    method: "Card",
-    status: "Success",
-    date: "30 Sep 2026",
-    time: "10:18 AM",
-    category: "Purchase",
-  },
-  {
-    id: "TXN-1003",
-    customer: "Amit Kulkarni",
-    amount: 2100,
-    method: "UPI",
-    status: "Failed",
-    date: "30 Sep 2026",
-    time: "09:56 AM",
-    category: "Purchase",
-  },
-  {
-    id: "TXN-1004",
-    customer: "Priya Joshi",
-    amount: 1750,
-    method: "UPI",
-    status: "Success",
-    date: "30 Sep 2026",
-    time: "09:31 AM",
-    category: "Purchase",
-  },
-  {
-    id: "TXN-1005",
-    customer: "Suresh More",
-    amount: 620,
-    method: "Cash",
-    status: "Success",
-    date: "30 Sep 2026",
-    time: "09:05 AM",
-    category: "Purchase",
-  },
-  {
-    id: "TXN-1006",
-    customer: "Anjali Deshmukh",
-    amount: 980,
-    method: "UPI",
-    status: "Pending",
-    date: "30 Sep 2026",
-    time: "08:44 AM",
-    category: "Purchase",
-  },
-  {
-    id: "TXN-1007",
-    customer: "Rahul Shah",
-    amount: 1450,
-    method: "Card",
-    status: "Success",
-    date: "29 Sep 2026",
-    time: "07:32 PM",
-    category: "Purchase",
-  },
-  {
-    id: "TXN-1008",
-    customer: "Meera Nair",
-    amount: 3200,
-    method: "UPI",
-    status: "Failed",
-    date: "29 Sep 2026",
-    time: "06:48 PM",
-    category: "Purchase",
-  },
-];
+import Card from "../components/ui/Card";
+import LoadingState from "../components/ui/LoadingState";
+import ErrorState from "../components/ui/ErrorState";
+import EmptyState from "../components/ui/EmptyState";
+import { get } from "../lib/api";
 
 const statusConfig = {
   Success: {
@@ -108,10 +30,118 @@ const statusConfig = {
   },
 };
 
+function formatStatus(status) {
+  if (!status) return "Unknown";
+
+  return status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return {
+      date: "—",
+      time: "—",
+    };
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return {
+      date: value,
+      time: "—",
+    };
+  }
+
+  return {
+    date: date.toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }),
+    time: date.toLocaleTimeString("en-IN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  };
+}
+
+function normalizeTransaction(transaction) {
+  const { date, time } = formatDateTime(transaction.created_at);
+
+  return {
+    id: `TXN-${transaction.id}`,
+    customer: transaction.customer || "Unknown customer",
+    amount: Number(transaction.amount || 0),
+    method: transaction.payment_method || "Unknown",
+    status: formatStatus(transaction.status),
+    date,
+    time,
+    category: transaction.product || "Purchase",
+  };
+}
+function DetailRow({ label, value }) {
+  return (
+    <div className="flex items-start justify-between gap-6 border-b border-border pb-4 last:border-b-0 last:pb-0">
+      <p className="shrink-0 text-sm text-text-secondary">
+        {label}
+      </p>
+
+      <p className="text-right text-sm font-medium text-text">
+        {value || "—"}
+      </p>
+    </div>
+  );
+}
 function Transactions() {
+  const [transactions, setTransactions] = useState([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [selectedTransaction, setSelectedTransaction] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadTransactions() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const storedMerchant = localStorage.getItem("selectedMerchant");
+
+        if (!storedMerchant) {
+          throw new Error("No merchant is selected.");
+        }
+
+        const merchant = JSON.parse(storedMerchant);
+
+        if (!merchant?.id) {
+          throw new Error(
+            "The selected merchant is not connected to the backend."
+          );
+        }
+
+        const data = await get(
+          `/api/transactions/merchant/${merchant.id}`
+        );
+
+        const backendTransactions = Array.isArray(data?.transactions)
+          ? data.transactions
+          : [];
+
+        setTransactions(backendTransactions.map(normalizeTransaction));
+      } catch (err) {
+        setError(
+          err?.message ||
+            "Unable to load transactions. Please try again."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadTransactions();
+  }, []);
 
   const filteredTransactions = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -121,14 +151,16 @@ function Transactions() {
         !query ||
         transaction.customer.toLowerCase().includes(query) ||
         transaction.id.toLowerCase().includes(query) ||
-        transaction.method.toLowerCase().includes(query);
+        transaction.method.toLowerCase().includes(query) ||
+        transaction.category.toLowerCase().includes(query);
 
       const matchesStatus =
-        statusFilter === "All" || transaction.status === statusFilter;
+        statusFilter === "All" ||
+        transaction.status === statusFilter;
 
       return matchesSearch && matchesStatus;
     });
-  }, [search, statusFilter]);
+  }, [transactions, search, statusFilter]);
 
   const totalAmount = transactions
     .filter((transaction) => transaction.status === "Success")
@@ -142,6 +174,23 @@ function Transactions() {
     (transaction) => transaction.status === "Failed"
   ).length;
 
+  if (loading) {
+    return <LoadingState message="Loading transactions..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
+  }
+
+  if (transactions.length === 0) {
+    return (
+      <EmptyState
+        title="No transactions available"
+        message="There are no transactions available for this merchant."
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -149,6 +198,7 @@ function Transactions() {
         <h1 className="text-2xl font-semibold tracking-tight text-navy">
           Transactions
         </h1>
+
         <p className="mt-1 text-sm text-text-secondary">
           View and track your recent business transactions.
         </p>
@@ -157,30 +207,42 @@ function Transactions() {
       {/* Summary Cards */}
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
-          <p className="text-sm text-text-secondary">Successful Payments</p>
+          <p className="text-sm text-text-secondary">
+            Successful Payments
+          </p>
+
           <p className="mt-2 text-2xl font-semibold text-navy">
             {successfulCount}
           </p>
+
           <p className="mt-1 text-xs text-success">
             ₹{totalAmount.toLocaleString("en-IN")} processed
           </p>
         </Card>
 
         <Card>
-          <p className="text-sm text-text-secondary">Failed Payments</p>
+          <p className="text-sm text-text-secondary">
+            Failed Payments
+          </p>
+
           <p className="mt-2 text-2xl font-semibold text-navy">
             {failedCount}
           </p>
+
           <p className="mt-1 text-xs text-error">
             Requires attention
           </p>
         </Card>
 
         <Card>
-          <p className="text-sm text-text-secondary">Total Transactions</p>
+          <p className="text-sm text-text-secondary">
+            Total Transactions
+          </p>
+
           <p className="mt-2 text-2xl font-semibold text-navy">
             {transactions.length}
           </p>
+
           <p className="mt-1 text-xs text-text-secondary">
             Across recent activity
           </p>
@@ -195,6 +257,7 @@ function Transactions() {
               <h2 className="text-lg font-semibold text-navy">
                 Recent Transactions
               </h2>
+
               <p className="mt-1 text-sm text-text-secondary">
                 Search and filter your payment activity.
               </p>
@@ -208,6 +271,7 @@ function Transactions() {
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary"
                   strokeWidth={1.8}
                 />
+
                 <input
                   type="text"
                   value={search}
@@ -224,6 +288,7 @@ function Transactions() {
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary"
                   strokeWidth={1.8}
                 />
+
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
@@ -247,18 +312,23 @@ function Transactions() {
                 <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   Transaction
                 </th>
+
                 <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   Customer
                 </th>
+
                 <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   Amount
                 </th>
+
                 <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   Method
                 </th>
+
                 <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   Status
                 </th>
+
                 <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   Date
                 </th>
@@ -267,13 +337,18 @@ function Transactions() {
 
             <tbody>
               {filteredTransactions.map((transaction) => {
-                const config = statusConfig[transaction.status];
+                const config =
+                  statusConfig[transaction.status] ||
+                  statusConfig.Pending;
+
                 const StatusIcon = config.icon;
 
                 return (
                   <tr
                     key={transaction.id}
-                    onClick={() => setSelectedTransaction(transaction)}
+                    onClick={() =>
+                      setSelectedTransaction(transaction)
+                    }
                     className="cursor-pointer border-b border-border last:border-b-0 hover:bg-background/70"
                   >
                     <td className="px-6 py-4">
@@ -281,7 +356,8 @@ function Transactions() {
                         <p className="text-sm font-semibold text-navy">
                           {transaction.id}
                         </p>
-                        <p className="mt-1 text-xs text-text-secondary">
+
+                        <p className="mt-1 max-w-48 truncate text-xs text-text-secondary">
                           {transaction.category}
                         </p>
                       </div>
@@ -312,6 +388,7 @@ function Transactions() {
                       <p className="text-sm text-text">
                         {transaction.date}
                       </p>
+
                       <p className="mt-1 text-xs text-text-secondary">
                         {transaction.time}
                       </p>
@@ -327,6 +404,7 @@ function Transactions() {
               <p className="text-sm font-semibold text-navy">
                 No transactions found
               </p>
+
               <p className="mt-1 text-sm text-text-secondary">
                 Try changing your search or filter.
               </p>
@@ -351,6 +429,7 @@ function Transactions() {
                 <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">
                   Transaction Details
                 </p>
+
                 <h2 className="mt-1 text-lg font-semibold text-navy">
                   {selectedTransaction.id}
                 </h2>
@@ -368,21 +447,34 @@ function Transactions() {
 
             <div className="flex-1 overflow-y-auto p-6">
               <div className="rounded-xl bg-background p-5">
-                <p className="text-sm text-text-secondary">Payment Amount</p>
+                <p className="text-sm text-text-secondary">
+                  Payment Amount
+                </p>
+
                 <p className="mt-2 text-3xl font-semibold text-navy">
-                  ₹{selectedTransaction.amount.toLocaleString("en-IN")}
+                  ₹
+                  {selectedTransaction.amount.toLocaleString(
+                    "en-IN"
+                  )}
                 </p>
 
                 <div className="mt-4">
                   {(() => {
-                    const config = statusConfig[selectedTransaction.status];
+                    const config =
+                      statusConfig[selectedTransaction.status] ||
+                      statusConfig.Pending;
+
                     const StatusIcon = config.icon;
 
                     return (
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${config.className}`}
                       >
-                        <StatusIcon size={14} strokeWidth={2} />
+                        <StatusIcon
+                          size={14}
+                          strokeWidth={2}
+                        />
+
                         {selectedTransaction.status}
                       </span>
                     );
@@ -395,18 +487,22 @@ function Transactions() {
                   label="Customer"
                   value={selectedTransaction.customer}
                 />
+
                 <DetailRow
                   label="Payment Method"
                   value={selectedTransaction.method}
                 />
+
                 <DetailRow
                   label="Date"
                   value={`${selectedTransaction.date}, ${selectedTransaction.time}`}
                 />
+
                 <DetailRow
-                  label="Category"
+                  label="Product"
                   value={selectedTransaction.category}
                 />
+
                 <DetailRow
                   label="Transaction ID"
                   value={selectedTransaction.id}
@@ -421,10 +517,12 @@ function Transactions() {
                       className="mt-0.5 shrink-0 text-error"
                       strokeWidth={1.8}
                     />
+
                     <div>
                       <p className="text-sm font-semibold text-navy">
                         Payment requires attention
                       </p>
+
                       <p className="mt-1 text-sm leading-6 text-text-secondary">
                         This payment was unsuccessful and may represent a
                         recoverable sales opportunity.
@@ -437,15 +535,6 @@ function Transactions() {
           </aside>
         </div>
       )}
-    </div>
-  );
-}
-
-function DetailRow({ label, value }) {
-  return (
-    <div className="flex items-start justify-between gap-6 border-b border-border pb-4">
-      <p className="text-sm text-text-secondary">{label}</p>
-      <p className="text-right text-sm font-medium text-navy">{value}</p>
     </div>
   );
 }

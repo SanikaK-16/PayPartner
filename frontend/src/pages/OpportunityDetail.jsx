@@ -8,131 +8,37 @@ import {
   Users,
   TrendingDown,
   Gift,
+  Loader2,
+  XCircle,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
+import LoadingState from "../components/ui/LoadingState";
+import ErrorState from "../components/ui/ErrorState";
+import { get } from "../lib/api";
 
-const opportunityData = {
-  "failed-payment": {
-    priority: "HIGH",
-    title: "Failed Payment Recovery",
-    subtitle: "Recover revenue from recent failed payment attempts.",
+const WORKFLOW_1_WEBHOOK =
+  "https://sanikak123.app.n8n.cloud/webhook/paypartner/orchestrate";
+
+const opportunityTypeConfig = {
+  failed_payment_recovery: {
     icon: AlertCircle,
     iconStyle: "bg-error/10 text-error",
-
-    why: "17 recent payment attempts failed and represent recoverable revenue.",
-    impact: "₹4,200",
-    impactLabel: "Revenue at risk",
-    impactDetail: "17 failed payment transactions identified.",
-
-    recommendation:
-      "Send a recovery reminder to eligible customers and provide a payment retry path.",
-
-    policy: "Automatic recovery is enabled for eligible failed payments.",
-    policyAllowed: true,
-
-    action: "Start Recovery",
-
-    verification:
-      "Payment status will be checked after the recovery workflow completes.",
-
-    proof: "₹3,240 verified recovered",
-    proofDetail: "12 of 17 failed payments were successfully recovered.",
-
-    replan:
-      "5 payments remain unsuccessful and can be considered for the next permitted recovery attempt.",
   },
-
-  "repeat-customer": {
-    priority: "MEDIUM",
-    title: "Repeat Customer Opportunity",
-    subtitle: "Bring back customers who have become inactive.",
+  repeat_customer: {
     icon: Users,
     iconStyle: "bg-primary/10 text-primary",
-
-    why: "14 customers who previously purchased repeatedly have not returned within their expected purchase interval.",
-    impact: "14 customers",
-    impactLabel: "Lapsed repeat customers",
-    impactDetail: "Customers identified using their historical purchase behaviour.",
-
-    recommendation:
-      "Send a targeted re-engagement message to eligible lapsed repeat customers.",
-
-    policy: "Customer re-engagement communication is permitted.",
-    policyAllowed: true,
-
-    action: "Start Re-engagement",
-
-    verification:
-      "Future purchases and customer responses will be monitored.",
-
-    proof: "Re-engagement initiated",
-    proofDetail: "Eligible customers have been added to the action workflow.",
-
-    replan:
-      "Customers who do not respond can be considered for a later permitted follow-up.",
   },
-
-  "sales-pattern": {
-    priority: "MEDIUM",
-    title: "Sales Pattern Opportunity",
-    subtitle: "Address a recurring period of weaker sales.",
+  sales_pattern: {
     icon: TrendingDown,
     iconStyle: "bg-warning/10 text-warning",
-
-    why: "Tuesday between 2–5 PM is consistently performing below the normal sales baseline.",
-    impact: "18%",
-    impactLabel: "Below baseline",
-    impactDetail: "The identified period shows weaker sales performance.",
-
-    recommendation:
-      "Test a targeted promotion or customer engagement strategy during the weak period.",
-
-    policy: "Promotional actions require merchant approval before execution.",
-    policyAllowed: false,
-
-    action: "Request Approval",
-
-    verification:
-      "Sales performance will be compared against the baseline after the experiment.",
-
-    proof: "Experiment not started",
-    proofDetail: "Merchant approval is required before this action can be executed.",
-
-    replan:
-      "If the experiment does not improve sales, PayPartner can evaluate another permitted strategy.",
   },
-
-  "merchant-benefit": {
-    priority: "LOW",
-    title: "Merchant Benefit",
-    subtitle: "Review an available benefit for your business.",
+  merchant_benefit: {
     icon: Gift,
     iconStyle: "bg-success/10 text-success",
-
-    why: "Your business appears eligible for an available merchant benefit.",
-    impact: "₹7,500",
-    impactLabel: "Potential benefit value",
-    impactDetail: "Estimated value associated with available benefits.",
-
-    recommendation:
-      "Review the benefit details and activate eligible programs.",
-
-    policy: "Benefit activation requires eligibility confirmation.",
-    policyAllowed: true,
-
-    action: "Review Benefit",
-
-    verification:
-      "Eligibility and activation status will be verified after the action.",
-
-    proof: "Eligibility identified",
-    proofDetail: "The benefit is currently available for review.",
-
-    replan:
-      "If the benefit is not activated, PayPartner can review other eligible programs.",
   },
 };
 
@@ -156,13 +62,182 @@ function StepHeader({ number, title, icon: Icon }) {
   );
 }
 
+function StatusBadge({ children, tone = "neutral" }) {
+  const styles = {
+    success: "bg-success/10 text-success",
+    warning: "bg-warning/10 text-warning",
+    error: "bg-error/10 text-error",
+    neutral: "bg-background text-text-secondary",
+  };
+
+  return (
+    <span
+      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${styles[tone]}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function ImpactMetric({ label, value }) {
+  return (
+    <div className="rounded-lg border border-border bg-white p-4">
+      <p className="text-xs font-medium text-text-secondary">
+        {label}
+      </p>
+
+      <p className="mt-2 text-xl font-semibold text-navy">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function formatCurrency(value) {
+  return `₹${Number(value || 0).toLocaleString("en-IN")}`;
+}
+
 function OpportunityDetail() {
-  const { type } = useParams();
+  const { type: opportunityId } = useParams();
   const navigate = useNavigate();
 
-  const opportunity = opportunityData[type] || opportunityData["failed-payment"];
+  const [opportunity, setOpportunity] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const Icon = opportunity.icon;
+  const [merchantId, setMerchantId] = useState(null);
+
+  const [workflowResult, setWorkflowResult] = useState(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowError, setWorkflowError] = useState("");
+
+  useEffect(() => {
+    async function loadOpportunity() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const storedMerchant = localStorage.getItem(
+          "selectedMerchant"
+        );
+
+        if (!storedMerchant) {
+          throw new Error("No merchant is selected.");
+        }
+
+        const merchant = JSON.parse(storedMerchant);
+
+        if (!merchant?.id) {
+          throw new Error(
+            "The selected merchant is not connected to the backend."
+          );
+        }
+
+        setMerchantId(merchant.id);
+
+        const data = await get(
+          `/api/opportunities/merchant/${merchant.id}/${opportunityId}`
+        );
+
+        if (!data?.opportunity) {
+          throw new Error(
+            "Opportunity details were not returned by the backend."
+          );
+        }
+
+        setOpportunity(data.opportunity);
+      } catch (err) {
+        setError(
+          err?.message ||
+            "Unable to load the opportunity details. Please try again."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadOpportunity();
+  }, [opportunityId]);
+
+  async function handleStartWorkflow() {
+    if (!merchantId || !opportunity) {
+      return;
+    }
+
+    try {
+      setWorkflowLoading(true);
+      setWorkflowError("");
+      setWorkflowResult(null);
+
+      const response = await fetch(WORKFLOW_1_WEBHOOK, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          merchant_id: merchantId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Workflow request failed with status ${response.status}.`
+        );
+      }
+
+      const data = await response.json();
+
+      if (
+        typeof data?.replan_required !== "boolean"
+      ) {
+        throw new Error(
+          "The workflow returned an unexpected response."
+        );
+      }
+
+      setWorkflowResult(data);
+    } catch (err) {
+      console.error("Workflow 1 error:", err);
+
+      setWorkflowError(
+        err?.message ||
+          "Unable to start the PayPartner action. Please try again."
+      );
+    } finally {
+      setWorkflowLoading(false);
+    }
+  }
+
+  if (loading) {
+    return <LoadingState message="Loading opportunity details..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
+  }
+
+  if (!opportunity) {
+    return (
+      <ErrorState message="The requested opportunity could not be found." />
+    );
+  }
+
+  const config =
+    opportunityTypeConfig[opportunity.type] ||
+    opportunityTypeConfig.failed_payment_recovery;
+
+  const Icon = config.icon;
+
+  const actionSupported =
+    opportunity.type === "failed_payment_recovery";
+
+  const workflowCompleted = workflowResult !== null;
+
+  const fullyVerified =
+    workflowResult?.replan_required === false;
+
+  const replanRequired =
+    workflowResult?.replan_required === true;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -181,7 +256,7 @@ function OpportunityDetail() {
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-start gap-4">
             <div
-              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${opportunity.iconStyle}`}
+              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${config.iconStyle}`}
             >
               <Icon size={23} strokeWidth={1.8} />
             </div>
@@ -198,14 +273,14 @@ function OpportunityDetail() {
               </div>
 
               <p className="text-sm text-text-secondary">
-                {opportunity.subtitle}
+                {opportunity.description}
               </p>
             </div>
           </div>
         </div>
       </Card>
 
-      {/* WHY FOUND */}
+      {/* STEP 01 — WHY FOUND */}
       <Card>
         <StepHeader
           number="01"
@@ -215,12 +290,12 @@ function OpportunityDetail() {
 
         <div className="mt-5 rounded-lg bg-background p-5">
           <p className="text-sm leading-6 text-text">
-            {opportunity.why}
+            {opportunity.description}
           </p>
         </div>
       </Card>
 
-      {/* IMPACT */}
+      {/* STEP 02 — BUSINESS IMPACT */}
       <Card>
         <StepHeader
           number="02"
@@ -228,30 +303,20 @@ function OpportunityDetail() {
           icon={TrendingDown}
         />
 
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        <div className="mt-5">
           <div className="rounded-lg border border-border p-5">
             <p className="text-sm text-text-secondary">
-              {opportunity.impactLabel}
+              Potential opportunity value
             </p>
 
             <p className="mt-2 text-3xl font-semibold text-navy">
-              {opportunity.impact}
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-border p-5">
-            <p className="text-sm text-text-secondary">
-              Supporting detail
-            </p>
-
-            <p className="mt-2 text-sm leading-6 text-text">
-              {opportunity.impactDetail}
+              {formatCurrency(opportunity.potential_value)}
             </p>
           </div>
         </div>
       </Card>
 
-      {/* RECOMMENDATION */}
+      {/* STEP 03 — RECOMMENDED ACTION */}
       <Card>
         <StepHeader
           number="03"
@@ -259,14 +324,31 @@ function OpportunityDetail() {
           icon={Play}
         />
 
-        <div className="mt-5 rounded-lg border border-primary/20 bg-primary/5 p-5">
-          <p className="text-sm leading-6 text-text">
-            {opportunity.recommendation}
-          </p>
+        <div className="mt-5 rounded-lg border border-border bg-background p-5">
+          {actionSupported ? (
+            <>
+              <p className="text-sm leading-6 text-text">
+                Recover eligible failed payments identified by PayPartner.
+                The backend will determine the applicable policy and
+                targeted transactions.
+              </p>
+
+              <p className="mt-3 text-xs leading-5 text-text-secondary">
+                Action execution and verification are controlled by the
+                backend policy and action engines.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm leading-6 text-text-secondary">
+              This opportunity is identified by the backend, but the
+              current action workflow does not support automatic execution
+              for this opportunity type.
+            </p>
+          )}
         </div>
       </Card>
 
-      {/* POLICY */}
+      {/* STEP 04 — POLICY CHECK */}
       <Card>
         <StepHeader
           number="04"
@@ -274,38 +356,61 @@ function OpportunityDetail() {
           icon={ShieldCheck}
         />
 
-        <div
-          className={`mt-5 flex items-start gap-4 rounded-lg border p-5 ${
-            opportunity.policyAllowed
-              ? "border-success/20 bg-success/5"
-              : "border-warning/20 bg-warning/5"
-          }`}
-        >
-          <CheckCircle2
-            size={21}
-            className={
-              opportunity.policyAllowed
-                ? "text-success"
-                : "text-warning"
-            }
-            strokeWidth={1.8}
-          />
+        <div className="mt-5 space-y-4">
+          {!workflowCompleted && (
+            <div className="rounded-lg border border-border bg-background p-5">
+              <p className="text-sm leading-6 text-text-secondary">
+                Start the action to run the backend policy check for this
+                opportunity.
+              </p>
+            </div>
+          )}
 
-          <div>
-            <p className="text-sm font-semibold text-navy">
-              {opportunity.policyAllowed
-                ? "Action permitted"
-                : "Merchant approval required"}
-            </p>
+          {workflowCompleted && fullyVerified && (
+            <div className="rounded-lg border border-success/20 bg-success/5 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Policy and action workflow completed
+                  </p>
 
-            <p className="mt-1 text-sm leading-6 text-text-secondary">
-              {opportunity.policy}
-            </p>
-          </div>
+                  <p className="mt-1 text-sm text-text-secondary">
+                    The backend completed the policy-controlled action
+                    workflow successfully.
+                  </p>
+                </div>
+
+                <StatusBadge tone="success">
+                  Approved
+                </StatusBadge>
+              </div>
+            </div>
+          )}
+
+          {workflowCompleted && replanRequired && (
+            <div className="rounded-lg border border-warning/20 bg-warning/5 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Further action required
+                  </p>
+
+                  <p className="mt-1 text-sm text-text-secondary">
+                    The backend determined that another permitted recovery
+                    step is required.
+                  </p>
+                </div>
+
+                <StatusBadge tone="warning">
+                  Replan Required
+                </StatusBadge>
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
-      {/* ACTION */}
+      {/* STEP 05 — ACTION */}
       <Card>
         <StepHeader
           number="05"
@@ -313,19 +418,98 @@ function OpportunityDetail() {
           icon={Play}
         />
 
-        <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="max-w-2xl text-sm leading-6 text-text-secondary">
-            Review the recommendation and proceed only when the policy
-            requirements are satisfied.
-          </p>
+        <div className="mt-5 space-y-4">
+          {workflowError && (
+            <div className="flex items-start gap-3 rounded-lg border border-error/20 bg-error/5 p-4">
+              <XCircle
+                size={18}
+                className="mt-0.5 shrink-0 text-error"
+              />
 
-          <Button disabled={!opportunity.policyAllowed}>
-            {opportunity.action}
-          </Button>
+              <p className="text-sm leading-6 text-error">
+                {workflowError}
+              </p>
+            </div>
+          )}
+
+          {!workflowCompleted && (
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="max-w-2xl text-sm leading-6 text-text-secondary">
+                This opportunity is currently{" "}
+                <span className="font-semibold text-text">
+                  {opportunity.status}
+                </span>
+                .
+              </p>
+
+              <Button
+                disabled={
+                  !actionSupported || workflowLoading
+                }
+                onClick={handleStartWorkflow}
+              >
+                {workflowLoading ? (
+                  <>
+                    <Loader2
+                      size={16}
+                      className="animate-spin"
+                    />
+                    Processing...
+                  </>
+                ) : (
+                  "Start Action"
+                )}
+              </Button>
+            </div>
+          )}
+
+          {workflowCompleted && fullyVerified && (
+            <div className="rounded-lg border border-success/20 bg-success/5 p-5">
+              <div className="flex items-start gap-3">
+                <CheckCircle2
+                  size={20}
+                  className="mt-0.5 shrink-0 text-success"
+                />
+
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Action completed successfully
+                  </p>
+
+                  <p className="mt-1 text-sm leading-6 text-text-secondary">
+                    The backend completed the policy check, action
+                    execution, verification, and replan evaluation.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {workflowCompleted && replanRequired && (
+            <div className="rounded-lg border border-warning/20 bg-warning/5 p-5">
+              <div className="flex items-start gap-3">
+                <RotateCcw
+                  size={20}
+                  className="mt-0.5 shrink-0 text-warning"
+                />
+
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Additional recovery step required
+                  </p>
+
+                  <p className="mt-1 text-sm leading-6 text-text-secondary">
+                    The backend has determined that another permitted
+                    action or recovery step is required.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
-      {/* VERIFICATION */}
+      {/* STEP 06 — VERIFICATION */}
       <Card>
         <StepHeader
           number="06"
@@ -333,14 +517,61 @@ function OpportunityDetail() {
           icon={CheckCircle2}
         />
 
-        <div className="mt-5 rounded-lg bg-background p-5">
-          <p className="text-sm leading-6 text-text">
-            {opportunity.verification}
-          </p>
+        <div className="mt-5 space-y-4">
+          {!workflowCompleted && (
+            <div className="rounded-lg bg-background p-5">
+              <p className="text-sm leading-6 text-text-secondary">
+                Verification becomes available after the action has been
+                executed successfully.
+              </p>
+            </div>
+          )}
+
+          {workflowCompleted && fullyVerified && (
+            <div className="rounded-lg border border-success/20 bg-success/5 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Verification completed
+                  </p>
+
+                  <p className="mt-1 text-sm text-text-secondary">
+                    The backend confirmed that the target impact was fully
+                    verified.
+                  </p>
+                </div>
+
+                <StatusBadge tone="success">
+                  Fully Verified
+                </StatusBadge>
+              </div>
+            </div>
+          )}
+
+          {workflowCompleted && replanRequired && (
+            <div className="rounded-lg border border-warning/20 bg-warning/5 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Verification completed
+                  </p>
+
+                  <p className="mt-1 text-sm text-text-secondary">
+                    The backend completed verification and determined that
+                    another permitted recovery step is required.
+                  </p>
+                </div>
+
+                <StatusBadge tone="warning">
+                  Further Recovery Required
+                </StatusBadge>
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
-      {/* PROOF */}
+      {/* STEP 07 — PROOF OF IMPACT */}
       <Card>
         <StepHeader
           number="07"
@@ -348,18 +579,78 @@ function OpportunityDetail() {
           icon={CheckCircle2}
         />
 
-        <div className="mt-5 rounded-lg border border-success/20 bg-success/5 p-5">
-          <p className="text-lg font-semibold text-navy">
-            {opportunity.proof}
-          </p>
+        <div className="mt-5 space-y-4">
+          {!workflowCompleted && (
+            <div className="rounded-lg border border-border bg-background p-5">
+              <p className="text-sm leading-6 text-text-secondary">
+                Verified impact will appear here after the backend confirms
+                the executed action.
+              </p>
+            </div>
+          )}
 
-          <p className="mt-2 text-sm leading-6 text-text-secondary">
-            {opportunity.proofDetail}
-          </p>
+          {workflowCompleted && fullyVerified && (
+            <>
+              <div className="rounded-lg border border-success/20 bg-success/5 p-5">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2
+                    size={20}
+                    className="mt-0.5 shrink-0 text-success"
+                  />
+
+                  <div>
+                    <p className="text-sm font-semibold text-text">
+                      Impact verified
+                    </p>
+
+                    <p className="mt-1 text-sm leading-6 text-text-secondary">
+                      {workflowResult.reason ||
+                        "Target impact was fully verified by the backend."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-border bg-background p-5">
+                <p className="text-xs text-text-secondary">
+                  Verification status
+                </p>
+
+                <div className="mt-2">
+                  <StatusBadge tone="success">
+                    Target impact fully verified
+                  </StatusBadge>
+                </div>
+              </div>
+            </>
+          )}
+
+          {workflowCompleted && replanRequired && (
+            <div className="rounded-lg border border-warning/20 bg-warning/5 p-5">
+              <div className="flex items-start gap-3">
+                <RotateCcw
+                  size={20}
+                  className="mt-0.5 shrink-0 text-warning"
+                />
+
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Additional impact recovery required
+                  </p>
+
+                  <p className="mt-1 text-sm leading-6 text-text-secondary">
+                    The backend has verified the current action and
+                    determined that another permitted recovery step is
+                    required.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
-      {/* REPLAN */}
+      {/* STEP 08 — REPLAN */}
       <Card>
         <StepHeader
           number="08"
@@ -367,10 +658,58 @@ function OpportunityDetail() {
           icon={RotateCcw}
         />
 
-        <div className="mt-5 rounded-lg bg-background p-5">
-          <p className="text-sm leading-6 text-text">
-            {opportunity.replan}
-          </p>
+        <div className="mt-5 space-y-4">
+          {!workflowCompleted && (
+            <div className="rounded-lg bg-background p-5">
+              <p className="text-sm leading-6 text-text-secondary">
+                Replanning is evaluated after verification.
+              </p>
+            </div>
+          )}
+
+          {workflowCompleted && fullyVerified && (
+            <div className="rounded-lg border border-success/20 bg-success/5 p-5">
+              <div className="flex items-start gap-3">
+                <CheckCircle2
+                  size={20}
+                  className="mt-0.5 shrink-0 text-success"
+                />
+
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Recovery completed
+                  </p>
+
+                  <p className="mt-1 text-sm leading-6 text-text-secondary">
+                    {workflowResult.reason ||
+                      "The backend verified full impact, so no further automatic recovery is required."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {workflowCompleted && replanRequired && (
+            <div className="rounded-lg border border-warning/20 bg-warning/5 p-5">
+              <div className="flex items-start gap-3">
+                <RotateCcw
+                  size={20}
+                  className="mt-0.5 shrink-0 text-warning"
+                />
+
+                <div>
+                  <p className="text-sm font-semibold text-text">
+                    Replan required
+                  </p>
+
+                  <p className="mt-1 text-sm leading-6 text-text-secondary">
+                    {workflowResult.reason ||
+                      "The backend determined that another permitted action or recovery step is required."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Card>
     </div>

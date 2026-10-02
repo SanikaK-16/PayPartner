@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Mic,
   MicOff,
@@ -6,90 +6,215 @@ import {
   Volume2,
   Bot,
   Sparkles,
+  Loader2,
+  Square,
 } from "lucide-react";
+
+const VOICE_WEBHOOK =
+  "https://sanikak123.app.n8n.cloud/webhook/voice-paypartner";
 
 function VoiceAssistant({ onClose }) {
   const [isListening, setIsListening] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [response, setResponse] = useState("");
-  const recognitionRef = useRef(null);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const audioRef = useRef(null);
 
-    if (!SpeechRecognition) {
-      return;
+  const startListening = async () => {
+    try {
+      setError("");
+      setResponse("");
+      setTranscript("");
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm",
+        });
+
+        await sendVoiceToPayPartner(audioBlob);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+
+      setIsListening(true);
+    } catch (err) {
+      console.error("Microphone error:", err);
+
+      setError(
+        "Microphone access was not available. Please allow microphone access and try again."
+      );
+
+      setIsListening(false);
+    }
+  };
+
+  const stopListening = () => {
+    if (!mediaRecorderRef.current) return;
+
+    setIsListening(false);
+    setIsProcessing(true);
+
+    mediaRecorderRef.current.stop();
+    mediaRecorderRef.current = null;
+  };
+
+  const stopSpeaking = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
     }
 
-    const recognition = new SpeechRecognition();
+    setIsSpeaking(false);
+    setIsProcessing(false);
+  };
 
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = "en-IN";
+  const sendVoiceToPayPartner = async (audioBlob) => {
+    try {
+      const selectedMerchant = JSON.parse(
+        localStorage.getItem("selectedMerchant") || "{}"
+      );
 
-    recognition.onresult = (event) => {
-      let finalText = "";
-      let interimText = "";
+      const formData = new FormData();
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const text = event.results[i][0].transcript;
+      formData.append("data", audioBlob, "voice.webm");
 
-        if (event.results[i].isFinal) {
-          finalText += text;
+      if (selectedMerchant?.id) {
+        formData.append("merchant_id", String(selectedMerchant.id));
+      } else {
+        formData.append("merchant_id", "1");
+      }
+
+      const res = await fetch(VOICE_WEBHOOK, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        throw new Error(`Voice request failed: ${res.status}`);
+      }
+
+      const contentType = res.headers.get("content-type") || "";
+
+      if (contentType.includes("application/json")) {
+        const data = await res.json();
+
+        const answer =
+          data.answer ||
+          data.response ||
+          data.message ||
+          data.text ||
+          "";
+
+        if (data.transcript) {
+          setTranscript(data.transcript);
+        }
+
+        if (answer) {
+          setResponse(answer);
+        }
+
+        /*
+         * Current n8n Voice Response format:
+         *
+         * {
+         *   request_id: "...",
+         *   audios: ["BASE64_WAV_AUDIO"]
+         * }
+         */
+        const audioBase64 =
+          data.audio ||
+          data.audio_base64 ||
+          data.audioContent ||
+          data.tts_audio ||
+          data.audios?.[0] ||
+          null;
+
+        if (audioBase64) {
+          const audio = new Audio(
+            `data:audio/wav;base64,${audioBase64}`
+          );
+
+          audioRef.current = audio;
+
+          setIsProcessing(false);
+          setIsSpeaking(true);
+
+          audio.onended = () => {
+            audioRef.current = null;
+            setIsSpeaking(false);
+          };
+
+          audio.onerror = () => {
+            audioRef.current = null;
+            setIsSpeaking(false);
+            setError("PayPartner's voice response could not be played.");
+          };
+
+          await audio.play();
         } else {
-          interimText += text;
+          setIsProcessing(false);
+
+          if (!answer && !data.transcript) {
+            setResponse(
+              "PayPartner received your request but did not return a response."
+            );
+          }
+        }
+      } else {
+        const text = await res.text();
+
+        setIsProcessing(false);
+
+        if (text) {
+          setResponse(text);
         }
       }
+    } catch (err) {
+      console.error("Voice error:", err);
 
-      setTranscript(finalText || interimText);
+      setError(
+        "I couldn't connect to PayPartner voice right now. Please try again."
+      );
 
-      if (finalText) {
-        setResponse(
-          "I heard your request. I'll use your business data and configured policies to provide the relevant recommendation."
-        );
-      }
-    };
-
-    recognition.onstart = () => {
-      setIsListening(true);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognition.onerror = () => {
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-
-    return () => {
-      recognition.stop();
-    };
-  }, []);
+      setIsProcessing(false);
+      setIsSpeaking(false);
+    }
+  };
 
   const toggleListening = () => {
-    if (!recognitionRef.current) {
-      setResponse(
-        "Voice input is not supported in this browser. Please use a browser with speech recognition support."
-      );
+    if (isSpeaking) {
+      stopSpeaking();
       return;
     }
+
+    if (isProcessing) return;
 
     if (isListening) {
-      recognitionRef.current.stop();
-      return;
-    }
-
-    setTranscript("");
-    setResponse("");
-
-    try {
-      recognitionRef.current.start();
-    } catch {
-      setIsListening(false);
+      stopListening();
+    } else {
+      startListening();
     }
   };
 
@@ -131,23 +256,43 @@ function VoiceAssistant({ onClose }) {
               className={`mx-auto flex h-24 w-24 items-center justify-center rounded-full transition ${
                 isListening
                   ? "bg-primary text-white shadow-lg shadow-primary/30"
+                  : isSpeaking
+                  ? "bg-primary text-white shadow-lg shadow-primary/30"
                   : "bg-primary/10 text-primary"
               }`}
             >
               {isListening ? (
                 <Mic size={34} strokeWidth={1.7} />
+              ) : isSpeaking ? (
+                <Volume2 size={34} strokeWidth={1.7} />
+              ) : isProcessing ? (
+                <Loader2
+                  size={34}
+                  strokeWidth={1.7}
+                  className="animate-spin"
+                />
               ) : (
                 <Mic size={34} strokeWidth={1.7} />
               )}
             </div>
 
             <p className="mt-5 text-lg font-semibold text-navy">
-              {isListening ? "Listening..." : "Tap to speak"}
+              {isListening
+                ? "Listening..."
+                : isProcessing
+                ? "Thinking..."
+                : isSpeaking
+                ? "PayPartner is speaking..."
+                : "Tap to speak"}
             </p>
 
             <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-text-secondary">
               {isListening
                 ? "Tell PayPartner what you want to understand or act on."
+                : isProcessing
+                ? "PayPartner is processing your request."
+                : isSpeaking
+                ? "Tap the button below to stop the response."
                 : "Ask about sales, failed payments, customers, or business opportunities."}
             </p>
           </div>
@@ -174,42 +319,63 @@ function VoiceAssistant({ onClose }) {
           </div>
 
           {/* Response */}
-          {response && (
-            <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-4">
+          {(response || error) && (
+            <div
+              className={`mt-4 rounded-xl border p-4 ${
+                error
+                  ? "border-error/20 bg-error/5"
+                  : "border-primary/20 bg-primary/5"
+              }`}
+            >
               <div className="flex items-start gap-3">
                 <Sparkles
                   size={18}
-                  className="mt-0.5 shrink-0 text-primary"
+                  className={`mt-0.5 shrink-0 ${
+                    error ? "text-error" : "text-primary"
+                  }`}
                   strokeWidth={1.8}
                 />
 
                 <div>
                   <p className="text-xs font-medium text-text-secondary">
-                    PayPartner
+                    {error ? "Voice Assistant" : "PayPartner"}
                   </p>
 
                   <p className="mt-1 text-sm leading-6 text-text">
-                    {response}
+                    {error || response}
                   </p>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Mic Button */}
+          {/* Mic / Stop Button */}
           <div className="mt-7 flex justify-center">
             <button
               type="button"
               onClick={toggleListening}
+              disabled={isProcessing && !isSpeaking}
               className={`flex h-16 w-16 items-center justify-center rounded-full transition ${
-                isListening
+                isProcessing && !isSpeaking
+                  ? "cursor-not-allowed bg-text-secondary/40 text-white"
+                  : isListening
+                  ? "bg-error text-white hover:bg-error/90"
+                  : isSpeaking
                   ? "bg-error text-white hover:bg-error/90"
                   : "bg-primary text-white hover:bg-primary/90"
               }`}
-              aria-label={isListening ? "Stop listening" : "Start listening"}
+              aria-label={
+                isListening
+                  ? "Stop recording"
+                  : isSpeaking
+                  ? "Stop speaking"
+                  : "Start recording"
+              }
             >
               {isListening ? (
                 <MicOff size={25} strokeWidth={1.8} />
+              ) : isSpeaking ? (
+                <Square size={22} strokeWidth={2} />
               ) : (
                 <Mic size={25} strokeWidth={1.8} />
               )}
@@ -217,7 +383,13 @@ function VoiceAssistant({ onClose }) {
           </div>
 
           <p className="mt-3 text-center text-xs text-text-secondary">
-            {isListening ? "Tap to stop" : "Tap the microphone to start"}
+            {isListening
+              ? "Tap to stop"
+              : isProcessing
+              ? "Processing your request..."
+              : isSpeaking
+              ? "Tap to stop speaking"
+              : "Tap the microphone to start"}
           </p>
         </div>
 

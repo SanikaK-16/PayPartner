@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity as ActivityIcon,
   CheckCircle2,
@@ -8,89 +8,10 @@ import {
   Filter,
 } from "lucide-react";
 import Card from "../components/ui/Card";
-
-const activities = [
-  {
-    id: 1,
-    type: "action",
-    title: "Failed payment recovery initiated",
-    description:
-      "A recovery action was initiated for a failed payment opportunity.",
-    time: "Today, 10:45 AM",
-    status: "Completed",
-    category: "Actions",
-  },
-  {
-    id: 2,
-    type: "insight",
-    title: "Repeat customer opportunity identified",
-    description:
-      "PayPartner identified a customer with repeat-purchase potential.",
-    time: "Today, 10:20 AM",
-    status: "Reviewed",
-    category: "Insights",
-  },
-  {
-    id: 3,
-    type: "policy",
-    title: "Discount policy reviewed",
-    description:
-      "Current discount rules were checked before generating a recommendation.",
-    time: "Today, 09:58 AM",
-    status: "Completed",
-    category: "Policies",
-  },
-  {
-    id: 4,
-    type: "action",
-    title: "Customer offer prepared",
-    description:
-      "A customer-focused offer was prepared within the configured policy limits.",
-    time: "Today, 09:40 AM",
-    status: "Pending",
-    category: "Actions",
-  },
-  {
-    id: 5,
-    type: "system",
-    title: "Transaction data synchronized",
-    description:
-      "Recent transaction activity was processed for business insights.",
-    time: "Today, 09:15 AM",
-    status: "Completed",
-    category: "System",
-  },
-  {
-    id: 6,
-    type: "insight",
-    title: "Sales pattern detected",
-    description:
-      "A change in recent sales behaviour was identified for review.",
-    time: "Yesterday, 06:32 PM",
-    status: "Reviewed",
-    category: "Insights",
-  },
-  {
-    id: 7,
-    type: "policy",
-    title: "Merchant rules checked",
-    description:
-      "Business rules were verified before an opportunity was presented.",
-    time: "Yesterday, 05:48 PM",
-    status: "Completed",
-    category: "Policies",
-  },
-  {
-    id: 8,
-    type: "action",
-    title: "Opportunity marked for review",
-    description:
-      "A merchant opportunity was added to the attention queue.",
-    time: "Yesterday, 04:20 PM",
-    status: "Pending",
-    category: "Actions",
-  },
-];
+import LoadingState from "../components/ui/LoadingState";
+import ErrorState from "../components/ui/ErrorState";
+import EmptyState from "../components/ui/EmptyState";
+import { get } from "../lib/api";
 
 const categoryStyles = {
   Actions: "bg-primary/10 text-primary",
@@ -99,9 +20,115 @@ const categoryStyles = {
   System: "bg-background text-text-secondary",
 };
 
+function getCategory(eventType) {
+  switch (eventType) {
+    case "action":
+    case "action_created":
+    case "action_executed":
+      return "Actions";
+
+    case "policy_checked":
+      return "Policies";
+
+    case "verification":
+    case "impact_verified":
+      return "Insights";
+
+    default:
+      return "System";
+  }
+}
+
+function getMarkerType(category) {
+  switch (category) {
+    case "Actions":
+      return "action";
+    case "Insights":
+      return "insight";
+    case "Policies":
+      return "policy";
+    default:
+      return "system";
+  }
+}
+
+function formatTimestamp(timestamp) {
+  if (!timestamp) {
+    return "—";
+  }
+
+  const date = new Date(timestamp);
+
+  if (Number.isNaN(date.getTime())) {
+    return timestamp;
+  }
+
+  return new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function normalizeActivity(activity) {
+  const category = getCategory(activity.event_type);
+
+  return {
+    id: activity.id,
+    type: getMarkerType(category),
+    eventType: activity.event_type,
+    title: activity.event_type
+      ? activity.event_type
+          .replace(/_/g, " ")
+          .replace(/\b\w/g, (letter) => letter.toUpperCase())
+      : "Activity",
+    description: activity.message || "No activity description available.",
+    time: formatTimestamp(activity.timestamp),
+    status: activity.status
+      ? activity.status.charAt(0).toUpperCase() + activity.status.slice(1)
+      : "Unknown",
+    category,
+    actionId: activity.action_id,
+    opportunityId: activity.opportunity_id,
+  };
+}
+
 function Activity() {
+  const [activities, setActivities] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
+
+  useEffect(() => {
+    async function loadActivities() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const merchant = JSON.parse(
+          localStorage.getItem("paypartner_merchant") || "null"
+        );
+
+        const merchantId = merchant?.id || 1;
+
+        const data = await get(`/api/activity/merchant/${merchantId}`);
+
+        const normalizedActivities = Array.isArray(data?.activities)
+          ? data.activities.map(normalizeActivity)
+          : [];
+
+        setActivities(normalizedActivities);
+      } catch (err) {
+        setError(
+          err?.message || "Unable to load activity from the backend."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadActivities();
+  }, []);
 
   const filteredActivities = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -110,26 +137,35 @@ function Activity() {
       const matchesSearch =
         !query ||
         item.title.toLowerCase().includes(query) ||
-        item.description.toLowerCase().includes(query);
+        item.description.toLowerCase().includes(query) ||
+        item.eventType.toLowerCase().includes(query);
 
       const matchesCategory =
         category === "All" || item.category === category;
 
       return matchesSearch && matchesCategory;
     });
-  }, [search, category]);
+  }, [activities, search, category]);
 
   const completedCount = activities.filter(
-    (item) => item.status === "Completed"
+    (item) => item.status.toLowerCase() === "completed"
   ).length;
 
   const pendingCount = activities.filter(
-    (item) => item.status === "Pending"
+    (item) => item.status.toLowerCase() === "pending"
   ).length;
 
   const reviewedCount = activities.filter(
-    (item) => item.status === "Reviewed"
+    (item) => item.status.toLowerCase() === "reviewed"
   ).length;
+
+  if (loading) {
+    return <LoadingState message="Loading activity..." />;
+  }
+
+  if (error) {
+    return <ErrorState message={error} />;
+  }
 
   return (
     <div className="space-y-6">
@@ -138,6 +174,7 @@ function Activity() {
         <h1 className="text-2xl font-semibold tracking-tight text-navy">
           Activity
         </h1>
+
         <p className="mt-1 text-sm text-text-secondary">
           Track recommendations, actions, policy checks, and business events.
         </p>
@@ -224,70 +261,80 @@ function Activity() {
         </div>
 
         {/* Timeline */}
-        <div className="divide-y divide-border">
-          {filteredActivities.map((item) => (
-            <div
-              key={item.id}
-              className="flex gap-4 px-6 py-5 transition hover:bg-background/60"
-            >
-              <ActivityMarker type={item.type} />
+        {filteredActivities.length > 0 ? (
+          <div className="divide-y divide-border">
+            {filteredActivities.map((item) => (
+              <div
+                key={item.id}
+                className="flex gap-4 px-6 py-5 transition hover:bg-background/60"
+              >
+                <ActivityMarker type={item.type} />
 
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-sm font-semibold text-navy">
-                        {item.title}
-                      </h3>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-navy">
+                          {item.title}
+                        </h3>
 
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                          categoryStyles[item.category]
-                        }`}
-                      >
-                        {item.category}
-                      </span>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                            categoryStyles[item.category]
+                          }`}
+                        >
+                          {item.category}
+                        </span>
+                      </div>
+
+                      <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-secondary">
+                        {item.description}
+                      </p>
+
+                      {(item.actionId !== null ||
+                        item.opportunityId !== null) && (
+                        <div className="mt-2 flex flex-wrap gap-3 text-xs text-text-secondary">
+                          {item.actionId !== null && (
+                            <span>Action #{item.actionId}</span>
+                          )}
+
+                          {item.opportunityId !== null && (
+                            <span>
+                              Opportunity #{item.opportunityId}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-secondary">
-                      {item.description}
-                    </p>
-                  </div>
+                    <div className="shrink-0 sm:text-right">
+                      <p className="text-xs text-text-secondary">
+                        {item.time}
+                      </p>
 
-                  <div className="shrink-0 sm:text-right">
-                    <p className="text-xs text-text-secondary">
-                      {item.time}
-                    </p>
-
-                    <p
-                      className={`mt-1 text-xs font-medium ${
-                        item.status === "Completed"
-                          ? "text-success"
-                          : item.status === "Pending"
-                            ? "text-warning"
-                            : "text-text-secondary"
-                      }`}
-                    >
-                      {item.status}
-                    </p>
+                      <p
+                        className={`mt-1 text-xs font-medium ${
+                          item.status.toLowerCase() === "completed"
+                            ? "text-success"
+                            : item.status.toLowerCase() === "pending"
+                              ? "text-warning"
+                              : "text-text-secondary"
+                        }`}
+                      >
+                        {item.status}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-
-          {filteredActivities.length === 0 && (
-            <div className="px-6 py-12 text-center">
-              <p className="text-sm font-semibold text-navy">
-                No activity found
-              </p>
-
-              <p className="mt-1 text-sm text-text-secondary">
-                Try changing your search or filter.
-              </p>
-            </div>
-          )}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="No activity found"
+            message="Try changing your search or filter."
+          />
+        )}
       </Card>
 
       {/* Transparency Note */}

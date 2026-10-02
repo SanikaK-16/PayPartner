@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   ShieldCheck,
   CreditCard,
@@ -10,16 +10,12 @@ import {
   CheckCircle2,
   X,
 } from "lucide-react";
+
 import Card from "../components/ui/Card";
 import Button from "../components/ui/Button";
-
-const initialPolicies = {
-  automatic_recovery: true,
-  automatic_messaging: true,
-  max_discount_percent: 15,
-  campaign_limit: 1500,
-  approval_above_limit: true,
-};
+import LoadingState from "../components/ui/LoadingState";
+import ErrorState from "../components/ui/ErrorState";
+import { get, put } from "../lib/api";
 
 const policyDefinitions = [
   {
@@ -90,18 +86,77 @@ function formatPolicyValue(policy, value) {
   return value;
 }
 
+function normalizePolicy(policy) {
+  return {
+    automatic_recovery: Boolean(policy.automatic_recovery),
+    automatic_messaging: Boolean(policy.automatic_messaging),
+    max_discount_percent: Number(policy.max_discount_percent),
+    campaign_limit: Number(policy.campaign_limit),
+    approval_above_limit: Boolean(policy.approval_above_limit),
+  };
+}
+
 function Policies() {
-  const [policies, setPolicies] = useState(initialPolicies);
+  const [policies, setPolicies] = useState(null);
+  const [originalPolicies, setOriginalPolicies] = useState(null);
   const [selectedPolicy, setSelectedPolicy] = useState(null);
+
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [hasChanges, setHasChanges] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    setHasChanges(
-      JSON.stringify(policies) !== JSON.stringify(initialPolicies)
-    );
-  }, [policies]);
+    async function loadPolicies() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const storedMerchant = localStorage.getItem("selectedMerchant");
+
+        if (!storedMerchant) {
+          throw new Error("No merchant is selected.");
+        }
+
+        const merchant = JSON.parse(storedMerchant);
+
+        if (!merchant?.id) {
+          throw new Error(
+            "The selected merchant is not connected to the backend."
+          );
+        }
+
+        const data = await get(
+          `/api/policies/merchant/${merchant.id}`
+        );
+
+        if (!data?.policy) {
+          throw new Error(
+            "Policy configuration was not returned by the backend."
+          );
+        }
+
+        const normalized = normalizePolicy(data.policy);
+
+        setPolicies(normalized);
+        setOriginalPolicies(normalized);
+      } catch (err) {
+        setError(
+          err?.message ||
+            "Unable to load policies. Please try again."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadPolicies();
+  }, []);
+
+  const hasChanges =
+    policies &&
+    originalPolicies &&
+    JSON.stringify(policies) !== JSON.stringify(originalPolicies);
 
   const handleToggle = (id) => {
     setPolicies((current) => ({
@@ -124,22 +179,78 @@ function Policies() {
   };
 
   const handleSave = async () => {
-    if (!hasChanges || saving) {
+    if (!hasChanges || saving || !policies) {
       return;
     }
 
-    setSaving(true);
-    setSaved(false);
-
-    await new Promise((resolve) => setTimeout(resolve, 700));
-
-    setSaving(false);
-    setSaved(true);
-
-    setTimeout(() => {
+    try {
+      setSaving(true);
       setSaved(false);
-    }, 2500);
+      setError("");
+
+      const storedMerchant = localStorage.getItem("selectedMerchant");
+
+      if (!storedMerchant) {
+        throw new Error("No merchant is selected.");
+      }
+
+      const merchant = JSON.parse(storedMerchant);
+
+      if (!merchant?.id) {
+        throw new Error(
+          "The selected merchant is not connected to the backend."
+        );
+      }
+
+      const payload = {
+        automatic_recovery: Boolean(policies.automatic_recovery),
+        automatic_messaging: Boolean(policies.automatic_messaging),
+        max_discount_percent: Number(
+          policies.max_discount_percent
+        ),
+        campaign_limit: Number(policies.campaign_limit),
+        approval_above_limit: Boolean(
+          policies.approval_above_limit
+        ),
+      };
+
+      const data = await put(
+        `/api/policies/merchant/${merchant.id}`,
+        payload
+      );
+
+      if (!data?.policy) {
+        throw new Error(
+          "The backend did not return the updated policy."
+        );
+      }
+
+      const updatedPolicies = normalizePolicy(data.policy);
+
+      setPolicies(updatedPolicies);
+      setOriginalPolicies(updatedPolicies);
+      setSaved(true);
+
+      setTimeout(() => {
+        setSaved(false);
+      }, 2500);
+    } catch (err) {
+      setError(
+        err?.message ||
+          "Unable to save policies. Please try again."
+      );
+    } finally {
+      setSaving(false);
+    }
   };
+
+  if (loading) {
+    return <LoadingState message="Loading policies..." />;
+  }
+
+  if (error && !policies) {
+    return <ErrorState message={error} />;
+  }
 
   return (
     <div className="space-y-6">
@@ -172,11 +283,25 @@ function Policies() {
         </div>
       </div>
 
+      {/* Save Error */}
+      {error && policies && (
+        <div className="rounded-xl border border-error/20 bg-error/5 px-5 py-4">
+          <p className="text-sm font-semibold text-error">
+            Unable to save policy changes
+          </p>
+
+          <p className="mt-1 text-sm text-text-secondary">
+            {error}
+          </p>
+        </div>
+      )}
+
       {/* Policy Cards */}
       <div className="grid gap-5 md:grid-cols-2">
         {policyDefinitions.map((policy) => {
           const Icon = policy.icon;
           const value = policies[policy.id];
+
           const isEnabled =
             policy.type === "toggle" ? Boolean(value) : true;
 
@@ -230,9 +355,7 @@ function Policies() {
                         type="button"
                         onClick={() => handleToggle(policy.id)}
                         className={`relative h-6 w-11 rounded-full transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:ring-offset-1 ${
-                          isEnabled
-                            ? "bg-primary"
-                            : "bg-border"
+                          isEnabled ? "bg-primary" : "bg-border"
                         }`}
                         aria-label={`Toggle ${policy.title}`}
                         aria-pressed={isEnabled}
@@ -320,37 +443,37 @@ function Policies() {
         })}
       </div>
 
-     {/* Save Section */}
-<Card className="relative">
-  <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between lg:pr-28">
-    <div className="min-w-0">
-      <p className="text-sm font-semibold text-navy">
-        Policy configuration
-      </p>
+      {/* Save Section */}
+      <Card className="relative">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between lg:pr-28">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-navy">
+              Policy configuration
+            </p>
 
-      <p className="mt-1 text-sm leading-6 text-text-secondary">
-        Save your current business rules before continuing.
-      </p>
-    </div>
+            <p className="mt-1 text-sm leading-6 text-text-secondary">
+              Save your current business rules before continuing.
+            </p>
+          </div>
 
-    <div className="flex shrink-0 flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-      {saved && (
-        <span className="flex items-center justify-center gap-1.5 text-sm font-medium text-success">
-          <CheckCircle2 size={17} strokeWidth={1.8} />
-          Policies saved successfully
-        </span>
-      )}
+          <div className="flex shrink-0 flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+            {saved && (
+              <span className="flex items-center justify-center gap-1.5 text-sm font-medium text-success">
+                <CheckCircle2 size={17} strokeWidth={1.8} />
+                Policies saved successfully
+              </span>
+            )}
 
-      <Button
-        onClick={handleSave}
-        disabled={!hasChanges || saving}
-        className="min-w-32"
-      >
-        {saving ? "Saving..." : "Save Policies"}
-      </Button>
-    </div>
-  </div>
-</Card>
+            <Button
+              onClick={handleSave}
+              disabled={!hasChanges || saving}
+              className="min-w-32"
+            >
+              {saving ? "Saving..." : "Save Policies"}
+            </Button>
+          </div>
+        </div>
+      </Card>
 
       {/* Policy Details Drawer */}
       {selectedPolicy && (

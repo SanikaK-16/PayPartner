@@ -11,6 +11,9 @@ import {
 } from "lucide-react";
 import VoiceAssistant from "./VoiceAssistant";
 
+const N8N_ASK_WEBHOOK =
+  "https://sanikak123.app.n8n.cloud/webhook/ask-paypartner";
+
 const suggestions = [
   {
     label: "What needs my attention?",
@@ -30,46 +33,62 @@ const suggestions = [
   },
 ];
 
-function getDemoResponse(message) {
-  const query = message.toLowerCase();
+function getSelectedMerchant() {
+  try {
+    const storedMerchant = localStorage.getItem("selectedMerchant");
 
-  if (
-    query.includes("failed") ||
-    query.includes("payment") ||
-    query.includes("attention")
-  ) {
-    return {
-      text: "You have 1 high-priority opportunity: failed payments worth ₹4,200 are currently at risk. PayPartner recommends starting a payment recovery action within your configured policy limits.",
-      type: "opportunity",
-    };
+    if (!storedMerchant) {
+      return null;
+    }
+
+    return JSON.parse(storedMerchant);
+  } catch {
+    return null;
+  }
+}
+
+async function askPayPartner(message) {
+  const merchant = getSelectedMerchant();
+
+  if (!merchant?.id) {
+    throw new Error("Please select a merchant before using Ask PayPartner.");
   }
 
-  if (
-    query.includes("sales") ||
-    query.includes("drop") ||
-    query.includes("pattern")
-  ) {
-    return {
-      text: "Recent sales activity shows a change compared with the previous period. The current pattern suggests that customer repeat purchases are contributing to the change. I recommend reviewing the repeat-customer opportunity.",
-      type: "insight",
-    };
+  const response = await fetch(N8N_ASK_WEBHOOK, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      merchant_id: merchant.id,
+      message,
+    }),
+  });
+
+  const contentType = response.headers.get("content-type") || "";
+
+  let data;
+
+  if (contentType.includes("application/json")) {
+    data = await response.json();
+  } else {
+    data = await response.text();
   }
 
-  if (
-    query.includes("customer") ||
-    query.includes("target") ||
-    query.includes("repeat")
-  ) {
-    return {
-      text: "Your customer data shows a group of repeat purchasers who may be suitable for a retention-focused offer. Any recommendation should remain within your configured customer-offer and discount policies.",
-      type: "customer",
-    };
+  if (!response.ok) {
+    const errorMessage =
+      typeof data === "object" && data?.detail
+        ? data.detail
+        : `Ask PayPartner request failed with status ${response.status}.`;
+
+    throw new Error(errorMessage);
   }
 
-  return {
-    text: "I can help you understand your business activity, identify opportunities, explain trends, and suggest actions within your configured policies.",
-    type: "general",
-  };
+  if (typeof data === "object" && data?.answer) {
+    return data;
+  }
+
+  throw new Error("Ask PayPartner returned an unexpected response.");
 }
 
 function AskPayPartner() {
@@ -77,30 +96,46 @@ function AskPayPartner() {
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleSend = (text = message) => {
+  const handleSend = async (text = message) => {
     const trimmedMessage = text.trim();
 
-    if (!trimmedMessage) return;
-
-    const response = getDemoResponse(trimmedMessage);
-
-    setMessages((current) => [
-      ...current,
-      {
-        id: Date.now(),
-        role: "user",
-        text: trimmedMessage,
-      },
-      {
-        id: Date.now() + 1,
-        role: "assistant",
-        text: response.text,
-        type: response.type,
-      },
-    ]);
+    if (!trimmedMessage || isLoading) return;
 
     setMessage("");
+    setError("");
+
+    const userMessage = {
+      id: Date.now(),
+      role: "user",
+      text: trimmedMessage,
+    };
+
+    setMessages((current) => [...current, userMessage]);
+    setIsLoading(true);
+
+    try {
+      const response = await askPayPartner(trimmedMessage);
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: Date.now() + 1,
+          role: "assistant",
+          text: response.answer,
+          type: response.intent || "general",
+        },
+      ]);
+    } catch (requestError) {
+      setError(
+        requestError?.message ||
+          "Unable to reach PayPartner right now. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleSuggestion = (suggestion) => {
@@ -180,7 +215,8 @@ function AskPayPartner() {
                         key={suggestion.label}
                         type="button"
                         onClick={() => handleSuggestion(suggestion.label)}
-                        className="flex w-full items-center gap-3 rounded-xl border border-border bg-white px-4 py-3 text-left text-sm text-text transition hover:border-primary/30 hover:bg-primary/5"
+                        disabled={isLoading}
+                        className="flex w-full items-center gap-3 rounded-xl border border-border bg-white px-4 py-3 text-left text-sm text-text transition hover:border-primary/30 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Icon
                           size={17}
@@ -222,6 +258,26 @@ function AskPayPartner() {
                     )}
                   </div>
                 ))}
+
+                {isLoading && (
+                  <div className="flex justify-start">
+                    <div className="flex max-w-[88%] gap-2.5">
+                      <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <Bot size={15} strokeWidth={1.8} />
+                      </div>
+
+                      <div className="rounded-2xl rounded-bl-md border border-border bg-white px-4 py-3 text-sm text-text-secondary shadow-sm">
+                        Thinking...
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {error && (
+                  <div className="rounded-xl border border-error/20 bg-error/5 px-4 py-3 text-sm leading-6 text-error">
+                    {error}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -239,14 +295,16 @@ function AskPayPartner() {
                   }
                 }}
                 placeholder="Ask anything about your business..."
-                className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm text-text outline-none placeholder:text-text-secondary/70"
+                disabled={isLoading}
+                className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm text-text outline-none placeholder:text-text-secondary/70 disabled:cursor-not-allowed"
               />
 
               {/* Voice Button */}
               <button
                 type="button"
                 onClick={() => setVoiceOpen(true)}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-text-secondary transition hover:bg-white hover:text-primary"
+                disabled={isLoading}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-text-secondary transition hover:bg-white hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Use voice"
               >
                 <Mic size={17} strokeWidth={1.9} />
@@ -256,7 +314,7 @@ function AskPayPartner() {
               <button
                 type="button"
                 onClick={() => handleSend()}
-                disabled={!message.trim()}
+                disabled={!message.trim() || isLoading}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Send message"
               >
