@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models import Action, Opportunity
+from app.models import Action, Opportunity, Transaction
 from app.services.paytm_mock import recover_failed_payments
 
 from app.services.audit_service import create_audit_log
@@ -82,11 +82,28 @@ def execute_failed_payment_recovery(
     if action.execution_status == "completed":
         return action
 
-    result = recover_failed_payments(
-        merchant_id=action.merchant_id,
-        amount=action.requested_value or Decimal("0.00"),
+    targeted_transactions = (
+        db.query(Transaction)
+        .filter(
+            Transaction.merchant_id == action.merchant_id,
+            Transaction.id.in_(action.target_transaction_ids or []),
+            Transaction.status == "failed",
+        )
+        .all()
     )
 
+    targeted_value = sum(
+        (transaction.amount for transaction in targeted_transactions),
+        Decimal("0.00"),
+    )
+
+    result = recover_failed_payments(
+        db=db,
+        merchant_id=action.merchant_id,
+        target_transaction_ids=action.target_transaction_ids or [],
+        amount=targeted_value,
+    )
+    
     if result["status"] == "executed":
         action.execution_status = "completed"
     else:

@@ -128,7 +128,11 @@ def create_action(
         opportunity_id=request.opportunity_id,
         action_type=request.action_type,
         description=request.description,
-        requested_value=request.requested_value,
+        requested_value=(
+            targeted_value
+            if request.action_type == "failed_payment_recovery"
+            else request.requested_value
+        ),
         policy_status=policy_status,
         target_transaction_ids=target_transaction_ids,
     )
