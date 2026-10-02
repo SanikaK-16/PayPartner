@@ -3,6 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Opportunity
+from app.services.opportunity_engine import (
+    find_all_opportunities,
+    persist_opportunities,
+)
 
 
 router = APIRouter(
@@ -16,6 +20,19 @@ def get_merchant_opportunities(
     merchant_id: int,
     db: Session = Depends(get_db),
 ):
+    
+    # Refresh opportunities from the merchant's current business data.
+    current_opportunities = find_all_opportunities(
+        db,
+        merchant_id,
+    )
+
+    persist_opportunities(
+        db,
+        merchant_id,
+        current_opportunities,
+    )
+
     opportunities = (
         db.query(Opportunity)
         .filter(Opportunity.merchant_id == merchant_id)
