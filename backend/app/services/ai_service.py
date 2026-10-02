@@ -69,7 +69,7 @@ def _generate_with_model(model_name: str, prompt: str) -> str:
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             temperature=0.2,
-            max_output_tokens=400,
+            max_output_tokens=700,
         ),
     )
 
