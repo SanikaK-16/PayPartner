@@ -1,4 +1,5 @@
 import os
+import time
 
 from dotenv import load_dotenv
 from google import genai
@@ -14,7 +15,8 @@ if not GEMINI_API_KEY:
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-MODEL_NAME = "gemini-3.8-flash"
+PRIMARY_MODEL = "gemini-3.8-flash"
+FALLBACK_MODEL = "gemini-3.1-flash-lite"
 
 
 SYSTEM_INSTRUCTION = """
@@ -60,17 +62,29 @@ IMPORTANT RULES:
 """
 
 
+def _generate_with_model(model_name: str, prompt: str) -> str:
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTION,
+            temperature=0.2,
+            max_output_tokens=400,
+        ),
+    )
+
+    if not response.text:
+        raise RuntimeError(
+            f"Gemini model '{model_name}' returned an empty response."
+        )
+
+    return response.text.strip()
+
+
 def generate_merchant_response(
     merchant_message: str,
     business_context: dict,
 ) -> str:
-    """
-    Generate a merchant-facing response using backend-provided facts.
-
-    The LLM handles language and reasoning over supplied context.
-    Deterministic backend services remain responsible for financial truth,
-    policy enforcement, action execution, and verification.
-    """
 
     prompt = f"""
 Merchant question:
@@ -96,17 +110,28 @@ If the question asks about financial impact, clearly distinguish:
 Do not invent missing information.
 """
 
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.2,
-            max_output_tokens=400,
-        ),
-    )
+    try:
+        return _generate_with_model(PRIMARY_MODEL, prompt)
 
-    if not response.text:
-        raise RuntimeError("Gemini returned an empty response.")
+    except Exception as primary_error:
+        print(
+            f"[AI] Primary model '{PRIMARY_MODEL}' failed: "
+            f"{type(primary_error).__name__}: {primary_error}"
+        )
 
-    return response.text.strip()
+    time.sleep(1)
+
+    try:
+        print(f"[AI] Falling back to '{FALLBACK_MODEL}'.")
+        return _generate_with_model(FALLBACK_MODEL, prompt)
+
+    except Exception as fallback_error:
+        print(
+            f"[AI] Fallback model '{FALLBACK_MODEL}' failed: "
+            f"{type(fallback_error).__name__}: {fallback_error}"
+        )
+
+        raise RuntimeError(
+            "AI response generation failed. "
+            "Both Gemini models were temporarily unavailable."
+        ) from fallback_error
