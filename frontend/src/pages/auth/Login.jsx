@@ -49,12 +49,12 @@ function Login() {
         {/* Brand */}
         <div className="flex justify-center">
           <img
-            
+            src={paypartnerLogo}
             alt="PayPartner"
             className="h-auto w-94 object-contain"
           />
         </div>
-        src={paypartnerLogo}
+
         {/* Main content */}
         <div className="flex flex-1 items-center justify-center py-6">
           <div className="w-full max-w-4xl">
