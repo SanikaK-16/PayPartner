@@ -8,53 +8,64 @@ import Transactions from "./pages/Transactions";
 import Customers from "./pages/Customers";
 import Policies from "./pages/Policies";
 import Activity from "./pages/Activity";
-function ComingSoon({ title }) {
-  return (
-    <div className="rounded-xl border border-border bg-white p-8">
-      <h2 className="text-2xl font-semibold text-navy">
-        {title}
-      </h2>
 
-      <p className="mt-2 text-text-secondary">
-        This section will be built next.
-      </p>
-    </div>
-  );
+function ProtectedRoute({ children }) {
+  const selectedMerchant = localStorage.getItem("selectedMerchant");
+
+  if (!selectedMerchant) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return children;
 }
 
 function App() {
   return (
     <Routes>
-      {/* Standalone merchant entry */}
+      {/* Merchant entry */}
       <Route path="/login" element={<Login />} />
 
       {/* Main application */}
       <Route
         path="/*"
         element={
-          <AppLayout>
-            <Routes>
-              <Route
-                path="/"
-                element={<Navigate to="/overview" replace />}
-              />
+          <ProtectedRoute>
+            <AppLayout>
+              <Routes>
+                {/* Root → Login when no merchant, Overview when selected */}
+                <Route
+                  path="/"
+                  element={
+                    localStorage.getItem("selectedMerchant") ? (
+                      <Navigate to="/overview" replace />
+                    ) : (
+                      <Navigate to="/login" replace />
+                    )
+                  }
+                />
 
-              <Route path="/overview" element={<Overview />} />
+                <Route path="/overview" element={<Overview />} />
 
-              <Route path="/todays-business" element={<TodaysBusiness />} />
-              <Route
-  path="/opportunity/:type"
-  element={<OpportunityDetail />}
-/>
-              <Route path="/transactions" element={<Transactions />} />
+                <Route
+                  path="/todays-business"
+                  element={<TodaysBusiness />}
+                />
 
-              <Route path="/customers" element={<Customers />} />
+                <Route
+                  path="/opportunity/:type"
+                  element={<OpportunityDetail />}
+                />
 
-              <Route path="/policies" element={<Policies />} />
+                <Route path="/transactions" element={<Transactions />} />
 
-              <Route path="/activity" element={<Activity />} />
-            </Routes>
-          </AppLayout>
+                <Route path="/customers" element={<Customers />} />
+
+                <Route path="/policies" element={<Policies />} />
+
+                <Route path="/activity" element={<Activity />} />
+              </Routes>
+            </AppLayout>
+          </ProtectedRoute>
         }
       />
     </Routes>
