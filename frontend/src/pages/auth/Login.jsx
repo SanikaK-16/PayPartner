@@ -1,3 +1,4 @@
+import paypartnerLogo from "../../assets/paypartner_logo.png";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Store, ArrowRight } from "lucide-react";
@@ -48,12 +49,12 @@ function Login() {
         {/* Brand */}
         <div className="flex justify-center">
           <img
-            src="/src/assets/paypartner_logo.png"
+            
             alt="PayPartner"
             className="h-auto w-94 object-contain"
           />
         </div>
-
+        src={paypartnerLogo}
         {/* Main content */}
         <div className="flex flex-1 items-center justify-center py-6">
           <div className="w-full max-w-4xl">

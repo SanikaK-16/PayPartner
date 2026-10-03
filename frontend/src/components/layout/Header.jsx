@@ -1,3 +1,4 @@
+import paypartnerLogo from "../../assets/paypartner_logo.png";
 import { useEffect, useRef, useState } from "react";
 import {
   Bell,
@@ -273,7 +274,7 @@ function Header({ onMobileMenuToggle }) {
     className="flex items-center border-0 bg-transparent p-0 outline-none focus:outline-none focus:ring-0"
   >
     <img
-      src="/src/assets/paypartner_logo.png"
+     src={paypartnerLogo}
       alt="PayPartner"
       className="h-auto w-32 object-contain object-left sm:w-40 lg:w-44"
     />
