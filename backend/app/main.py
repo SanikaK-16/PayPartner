@@ -45,6 +45,7 @@ app.add_middleware(
         "https://paypartner-enqi-i8l9w0jmo-sanika-k.vercel.app",
         "https://paypartner-enqi.vercel.app",
     ],
+    allow_origin_regex=r"https://paypartner-[a-z0-9-]+-sanika-k\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
