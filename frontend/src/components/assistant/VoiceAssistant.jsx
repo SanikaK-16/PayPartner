@@ -24,6 +24,7 @@ function VoiceAssistant({ onClose }) {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(null);
+  const streamRef = useRef(null);
 
   const startListening = async () => {
     try {
@@ -32,30 +33,101 @@ function VoiceAssistant({ onClose }) {
       setTranscript("");
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
 
-      const recorder = new MediaRecorder(stream);
+      streamRef.current = stream;
+
+      let mimeType = "";
+
+      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+        mimeType = "audio/webm;codecs=opus";
+      } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+        mimeType = "audio/webm";
+      } else if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) {
+        mimeType = "audio/ogg;codecs=opus";
+      }
+
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
       audioChunksRef.current = [];
 
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+  console.log(
+    "Audio chunk:",
+    event.data.size,
+    "bytes",
+    event.data.type
+  );
+
+  if (event.data && event.data.size > 0) {
+    audioChunksRef.current.push(event.data);
+  }
+};
+
+      recorder.onerror = (event) => {
+        console.error("MediaRecorder error:", event);
+
+        setError("There was a problem recording your voice.");
+        setIsListening(false);
+        setIsProcessing(false);
       };
 
       recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
+        try {
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach((track) => track.stop());
+            streamRef.current = null;
+          }
 
-        const audioBlob = new Blob(audioChunksRef.current, {
-          type: "audio/webm",
-        });
+          const finalType =
+            recorder.mimeType ||
+            mimeType ||
+            "audio/webm";
 
-        await sendVoiceToPayPartner(audioBlob);
+          const audioBlob = new Blob(audioChunksRef.current, {
+            type: finalType,
+          });
+
+          console.log("Voice recording:");
+          console.log("MIME type:", finalType);
+          console.log("Blob size:", audioBlob.size);
+          console.log("Chunks:", audioChunksRef.current.length);
+
+          if (audioBlob.size < 1000) {
+            setError(
+              "The voice recording was too short. Please speak for a moment and try again."
+            );
+            setIsProcessing(false);
+            return;
+          }
+
+          await sendVoiceToPayPartner(audioBlob);
+        } catch (err) {
+          console.error("Recording processing error:", err);
+
+          setError(
+            "The recorded audio could not be processed. Please try again."
+          );
+
+          setIsProcessing(false);
+          setIsListening(false);
+        }
       };
 
       mediaRecorderRef.current = recorder;
-      recorder.start();
+
+      /*
+       * Request audio data every 250ms instead of waiting
+       * for the recorder to decide when to emit chunks.
+       */
+      recorder.start(250);
 
       setIsListening(true);
     } catch (err) {
@@ -66,16 +138,32 @@ function VoiceAssistant({ onClose }) {
       );
 
       setIsListening(false);
+      setIsProcessing(false);
     }
   };
 
   const stopListening = () => {
-    if (!mediaRecorderRef.current) return;
+    const recorder = mediaRecorderRef.current;
+
+    if (!recorder) return;
 
     setIsListening(false);
     setIsProcessing(true);
 
-    mediaRecorderRef.current.stop();
+    if (recorder.state === "recording") {
+      /*
+       * requestData() makes sure the latest available
+       * audio chunk is emitted before stopping.
+       */
+      try {
+        recorder.requestData();
+      } catch (err) {
+        console.warn("Could not request final audio data:", err);
+      }
+
+      recorder.stop();
+    }
+
     mediaRecorderRef.current = null;
   };
 
@@ -98,6 +186,9 @@ function VoiceAssistant({ onClose }) {
 
       const formData = new FormData();
 
+      /*
+       * n8n Webhook expects the binary field "data".
+       */
       formData.append("data", audioBlob, "voice.webm");
 
       if (selectedMerchant?.id) {
@@ -169,7 +260,9 @@ function VoiceAssistant({ onClose }) {
           audio.onerror = () => {
             audioRef.current = null;
             setIsSpeaking(false);
-            setError("PayPartner's voice response could not be played.");
+            setError(
+              "PayPartner's voice response could not be played."
+            );
           };
 
           await audio.play();
@@ -221,6 +314,7 @@ function VoiceAssistant({ onClose }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-navy/30 px-5 backdrop-blur-sm">
       <div className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-border bg-white shadow-2xl">
+
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-6 py-5">
           <div className="flex items-center gap-3">
